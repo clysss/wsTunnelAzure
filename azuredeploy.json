@@ -1,0 +1,91 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "appName": {
+      "type": "string",
+      "defaultValue": "mysql-tunnel-relay",
+      "metadata": { "description": "Nom unique de votre application Azure" }
+    },
+    "tunnelSecret": {
+      "type": "securestring",
+      "metadata": { "description": "Mot de passe secret pour authentifier le tunnel OVH" }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    }
+  },
+  "variables": {
+    "envName": "[concat(parameters('appName'), '-env')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('envName')]",
+      "location": "[parameters('location')]",
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('appName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('envName'))]"
+      ],
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('envName'))]",
+        "configuration": {
+          "secrets": [
+            {
+              "name": "tunnel-secret",
+              "value": "[parameters('tunnelSecret')]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "auto",
+            "additionalPortMappings": [
+              {
+                "external": true,
+                "targetPort": 3306,
+                "exposedPort": 3306
+              }
+            ]
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "wstunnel",
+              "image": "ghcr.io/erebe/wstunnel:latest",
+              "args": [
+                "server",
+                "ws://0.0.0.0:8080",
+                "--restrict-http-upgrade-path-prefix",
+                "[parameters('tunnelSecret')]"
+              ],
+              "resources": {
+                "cpu": 0.25,
+                "memory": "0.5Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 1
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "tunnelHost": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/containerApps', parameters('appName'))).configuration.ingress.fqdn]"
+    }
+  }
+}
