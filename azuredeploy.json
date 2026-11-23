@@ -1,53 +1,112 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
+  "metadata": {
+    "relayScriptSource": [
+      "const net = require('net');",
+      "const { WebSocketServer } = require('ws');",
+      "const SECRET = process.env.TUNNEL_SECRET;",
+      "const WAKE_URL = process.env.WAKE_ENDPOINT_URL + '?key=' + encodeURIComponent(process.env.WAKE_KEY || '');",
+      "console.log('RELAY_READY secretLen=' + (SECRET ? SECRET.length : 0) + ' wakeKeyLen=' + (process.env.WAKE_KEY ? process.env.WAKE_KEY.length : 0));",
+      "let ctrl = null, wait = [], pend = new Map();",
+      "const wss = new WebSocketServer({ port: 8080 });",
+      "wss.on('connection', (w, r) => {",
+      "  if (r.headers['x-api-key'] !== SECRET) { console.log('AUTH_FAIL'); return w.close(); }",
+      "  const sid = r.headers['x-session-id'];",
+      "  if (!sid) {",
+      "    console.log('CTRL_OK');",
+      "    ctrl = w;",
+      "    w.on('close', () => { if (ctrl === w) ctrl = null; });",
+      "    while (wait.length) {",
+      "      const s = wait.shift();",
+      "      if (!s.destroyed) w.send(JSON.stringify({ action: 'OPEN_DB', sessionId: s.id }));",
+      "    }",
+      "  } else {",
+      "    const s = pend.get(sid);",
+      "    if (!s || s.destroyed) return w.close();",
+      "    pend.delete(sid);",
+      "    w.on('message', d => !s.destroyed && s.write(d));",
+      "    s.on('data', d => w.readyState === 1 && w.send(d));",
+      "    const end = () => { try { w.close(); } catch {} try { s.destroy(); } catch {} };",
+      "    w.on('close', end); s.on('close', end); s.on('error', end);",
+      "    s.resume();",
+      "  }",
+      "});",
+      "net.createServer(s => {",
+      "  s.pause();",
+      "  s.id = Math.random().toString(36).slice(2);",
+      "  pend.set(s.id, s);",
+      "  setTimeout(() => { if (pend.has(s.id)) { pend.delete(s.id); s.destroy(); } }, 6000);",
+      "  if (ctrl && ctrl.readyState === 1) ctrl.send(JSON.stringify({ action: 'OPEN_DB', sessionId: s.id }));",
+      "  else { wait.push(s); fetch(WAKE_URL).catch(e => console.log('WAKE_ERR', e.message)); }",
+      "}).listen(3306);"
+    ]
+  },
   "parameters": {
-    "appName": {
+    "containerGroupName": {
       "type": "string",
       "defaultValue": "mysql-tunnel-relay",
       "metadata": {
-        "description": "Unique name for your Azure Container Instance"
+        "description": "Nom du groupe de conteneurs Azure."
       }
     },
-    "tunnelSecret": {
+    "dnsNameLabel": {
       "type": "string",
-      "defaultValue": "CHANGE_ME_TUNNEL_SECRET",
+      "defaultValue": "[concat('mysql-relay-', uniqueString(resourceGroup().id))]",
       "metadata": {
-        "description": "Shared secret matching $TUNNEL_SECRET in mysql_tunnel.php"
-      }
-    },
-    "wakeUrl": {
-      "type": "string",
-      "defaultValue": "https://yourdomain.com/mysql_tunnel.php?key=WAKE_KEY",
-      "metadata": {
-        "description": "Full HTTPS URL to wake OVH (replace yourdomain.com and WAKE_KEY)"
+        "description": "Préfixe DNS public unique. Saisissez votre label existant (ex: mysql-tunnel-relay-qqfcimd6vq5xi) si vous mettez à jour une instance existante."
       }
     },
     "location": {
       "type": "string",
-      "defaultValue": "[resourceGroup().location]"
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Région Azure (ex: francecentral)."
+      }
+    },
+    "wakeEndpointUrl": {
+      "type": "string",
+      "defaultValue": "https://votre-domaine.fr/mysql_tunnel.php",
+      "metadata": {
+        "description": "URL du script PHP sans paramètre ?key=."
+      }
+    },
+    "WAKE_KEY": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Doit être strictement identique à $WAKE_KEY dans le script PHP."
+      }
+    },
+    "TUNNEL_SECRET": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Doit être strictement identique à $TUNNEL_SECRET dans le script PHP."
+      }
     }
+  },
+  "variables": {
+    "relayScriptBase64": "Y29uc3QgbmV0ID0gcmVxdWlyZSgibmV0Iik7CmNvbnN0IHsgV2ViU29ja2V0U2VydmVyIH0gPSByZXF1aXJlKCJ3cyIpOwpjb25zdCBTRUNSRVQgPSBwcm9jZXNzLmVudi5UVU5ORUxfU0VDUkVUOwpjb25zdCBXQUtFX1VSTCA9IHByb2Nlc3MuZW52LldBS0VfRU5EUE9JTlRfVVJMICsgIj9rZXk9IiArIGVuY29kZVVSSUNvbXBvbmVudChwcm9jZXNzLmVudi5XQUtFX0tFWSB8fCAiIik7CmNvbnNvbGUubG9nKCJSRUxBWV9SRUFEWSBzZWNyZXRMZW49IiArIChTRUNSRVQ/U0VDUkVULmxlbmd0aDowKSArICIgd2FrZUtleUxlbj0iICsgKHByb2Nlc3MuZW52LldBS0VfS0VZPnByb2Nlc3MuZW52LldBS0VfS0VZLmxlbmd0aDowKSk7CmxldCBjdHJsID0gbnVsbCwgd2FpdCA9IFtdLCBwZW5kID0gbmV3IE1hcCgpOwpjb25zdCB3c3MgPSBuZXcgV2ViU29ja2V0U2VydmVyKHsgcG9ydDogODA4MCB9KTsKd3NzLm9uKCJjb25uZWN0aW9uIiwgKHcsIHIpID0+IHsKICBpZiAoci5oZWFkZXJzWyJ4LWFwaS1rZXkiXSAhPT0gU0VDUkVUKSB7IGNvbnNvbGUubG9nKCJBVVRIX0ZBSUwiKTsgcmV0dXJuIHcuY2xvc2UoKTsgfQogIGNvbnN0IHNpZCA9IHIuaGVhZGVyc1sieC1zZXNzaW9uLWlkIl07CiAgaWYgKCFzaWQpIHsKICAgIGNvbnNvbGUubG9nKCJDVFJMX09LIik7CiAgICBjdHJsID0gdzsKICAgIHcub24oImNsb3NlIiwgKCkgPT4geyBpZiAoY3RybCA9PT0gdykgY3RybCA9IG51bGw7IH0pOwogICAgd2hpbGUgKHdhaXQubGVuZ3RoKSB7CiAgICAgIGNvbnN0IHMgPSB3YWl0LnNoaWZ0KCk7CiAgICAgIGlmICghcy5kZXN0cm95ZWQpIHcuc2VuZChKU09OLnN0cmluZ2lmeSh7IGFjdGlvbjogIk9QRU5fREIiLCBzZXNzaW9uSWQ6IHMuaWQgfSkpOwogICAgfQogIH0gZWxzZSB7CiAgICBjb25zdCBzID0gcGVuZC5nZXQoc2lkKTsKICAgIGlmICghcyB8fCBzLmRlc3Ryb3llZCkgcmV0dXJuIHcuY2xvc2UoKTsKICAgIHBlbmQuZGVsZXRlKHNpZCk7CiAgICB3Lm9uKCJtZXNzYWdlIiwgZCA9PiAhcy5kZXN0cm95ZWQgJiYgcy53cml0ZShkKSk7CiAgICBzLm9uKCJkYXRhIiwgZCA9PiB3LnJlYWR5U3RhdGUgPT09IDEgJiYgdy5zZW5kKGQpKTsKICAgIGNvbnN0IGVuZCA9ICgpID0+IHsgdHJ5IHsgdy5jbG9zZSgpOyB9IGNhdGNoIHt9IHRyeSB7IHMuZGVzdHJveSgpOyB9IGNhdGNoIHt9IH07CiAgICB3Lm9uKCJjbG9zZSIsIGVuZCk7IHMub24oImNsb3NlIiwgZW5kKTsgcy5vbigiZXJyb3IiLCBlbmQpOwogICAgcy5yZXN1bWUoKTsKICB9Cn0pOwpuZXQuY3JlYXRlU2VydmVyKHMgPT4gewogIHMucGF1c2UoKTsKICBzLmlkID0gTWF0aC5yYW5kb20oKS50b1N0cmluZygzNikuc2xpY2UoMik7CiAgcGVuZC5zZXQocy5pZCwgcyk7CiAgc2V0VGltZW91dCgoKSA9PiB7IGlmIChwZW5kLmhhcyhzLmlkKSkgeyBwZW5kLmRlbGV0ZShzLmlkKTsgcy5kZXN0cm95KCk7IH0gfSwgNjAwMCk7CiAgaWYgKGN0cmwgJiYgY3RybC5yZWFkeVN0YXRlID09PSAxKSBjdHJsLnNlbmQoSlNPTi5zdHJpbmdpZnkoeyBhY3Rpb246ICJPUEVOX0RCIiwgc2Vzc2lvbklkOiBzLmlkIH0pKTsKICBlbHNlIHsgd2FpdC5wdXNoKHMpOyBmZXRjaChXQUtFX1VSTCkuY2F0Y2goZSA9PiBjb25zb2xlLmxvZygiV0FLRV9FUlIiLCBlLm1lc3NhZ2UpKTsgfQp9KS5saXN0ZW4oMzMwNik7"
   },
   "resources": [
     {
       "type": "Microsoft.ContainerInstance/containerGroups",
       "apiVersion": "2023-05-01",
-      "name": "[parameters('appName')]",
+      "name": "[parameters('containerGroupName')]",
       "location": "[parameters('location')]",
       "properties": {
         "osType": "Linux",
         "restartPolicy": "Always",
         "ipAddress": {
           "type": "Public",
-          "dnsNameLabel": "[concat(parameters('appName'), '-', uniqueString(resourceGroup().id))]",
+          "dnsNameLabel": "[parameters('dnsNameLabel')]",
           "ports": [
             {
               "protocol": "TCP",
-              "port": 8080
+              "port": 3306
             },
             {
               "protocol": "TCP",
-              "port": 3306
+              "port": 8080
             }
           ]
         },
@@ -56,37 +115,41 @@
             "name": "mysql-relay",
             "properties": {
               "image": "node:20-alpine",
-              "command": [
-                "/bin/sh",
-                "-c",
-                "npm install ws && node -e \"const net=require('net'),{WebSocketServer}=require('ws'),S=process.env.API_SECRET,W=process.env.WAKE_URL;let ovh=null,waking=false;const c=new Map(),q=[];function go(t){const id=Math.random().toString(36).slice(2);c.set(id,t);ovh.send(JSON.stringify({action:'OPEN_DB',sessionId:id}));}function wake(){if(waking||!W)return;waking=true;fetch(W).catch(()=>{}).finally(()=>setTimeout(()=>{waking=false},3000));}new WebSocketServer({port:8080}).on('connection',(w,r)=>{if(r.headers['x-api-key']!==S)return w.close();const id=r.headers['x-session-id'];if(!id){ovh=w;w.on('close',()=>{if(ovh===w)ovh=null});while(q.length>0){const t=q.shift();if(!t.destroyed)go(t);}return;}const t=c.get(id);if(!t)return w.close();w.on('message',d=>t.write(d));t.on('data',d=>w.send(d));w.on('close',()=>t.destroy());t.on('close',()=>{c.delete(id);w.close()});});net.createServer(t=>{if(ovh&&ovh.readyState===1)return go(t);q.push(t);wake();const to=setTimeout(()=>{const i=q.indexOf(t);if(i!==-1){q.splice(i,1);t.destroy();}},6000);t.on('close',()=>clearTimeout(to));}).listen(3306,'0.0.0.0');\""
-              ],
+              "resources": {
+                "requests": {
+                  "cpu": 0.5,
+                  "memoryInGB": 1.0
+                }
+              },
               "ports": [
                 {
                   "protocol": "TCP",
-                  "port": 8080
+                  "port": 3306
                 },
                 {
                   "protocol": "TCP",
-                  "port": 3306
+                  "port": 8080
                 }
               ],
               "environmentVariables": [
                 {
-                  "name": "API_SECRET",
-                  "secureValue": "[parameters('tunnelSecret')]"
+                  "name": "WAKE_ENDPOINT_URL",
+                  "value": "[parameters('wakeEndpointUrl')]"
                 },
                 {
-                  "name": "WAKE_URL",
-                  "value": "[parameters('wakeUrl')]"
+                  "name": "WAKE_KEY",
+                  "secureValue": "[parameters('WAKE_KEY')]"
+                },
+                {
+                  "name": "TUNNEL_SECRET",
+                  "secureValue": "[parameters('TUNNEL_SECRET')]"
                 }
               ],
-              "resources": {
-                "requests": {
-                  "cpu": 0.5,
-                  "memoryInGB": 0.5
-                }
-              }
+              "command": [
+                "/bin/sh",
+                "-c",
+                "[concat('mkdir -p /app && cd /app && npm init -y >/dev/null && npm install ws && echo ', variables('relayScriptBase64'), ' | base64 -d > server.js && node server.js')]"
+              ]
             }
           }
         ]
@@ -94,9 +157,9 @@
     }
   ],
   "outputs": {
-    "tunnelHost": {
+    "fqdn": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.ContainerInstance/containerGroups', parameters('appName'))).ipAddress.fqdn]"
+      "value": "[reference(resourceId('Microsoft.ContainerInstance/containerGroups', parameters('containerGroupName'))).ipAddress.fqdn]"
     }
   }
 }
