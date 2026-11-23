@@ -27,14 +27,16 @@ ignore_user_abort(true);
 @ini_set('default_socket_timeout', 5);
 
 // 3. Immediately return "200 OK" to Azure to release the HTTP wake-up request
+while (ob_get_level() > 0) {
+    ob_end_clean();
+}
 header('Content-Type: text/plain');
 header('Connection: close');
 header('Content-Length: 2');
 echo 'OK';
+flush();
 if (function_exists('fastcgi_finish_request')) {
     fastcgi_finish_request();
-} else {
-    flush();
 }
 
 $startTime = time();
