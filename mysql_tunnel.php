@@ -1,8 +1,23 @@
 <?php
-// mysql_tunnel.php — Place inside www/ on your OVH hosting
+// ============================================================================
+// DEPLOYMENT LOCATION:
+// Upload this file to your OVH public web folder (or better to a subfolder) : 
+// www/mysql_tunnel.php 
+// and rename it.
+// ============================================================================
+
+// ============================================================================
+// CONFIGURATION — Edit these 5 values before uploading
+// ============================================================================
+$WAKE_KEY      = 'YOUR_URL_SECRET_KEY'; // Secret token expected in ?key=... (must match WAKE_URL on Azure)
+$AZURE_HOST    = 'mysql-tunnel-relay.xxxx.francecentral.azurecontainerapps.io'; // Your Azure Container App FQDN (without https://)
+$TUNNEL_SECRET = 'YOUR_TUNNEL_SECRET';  // Must match the tunnelSecret parameter on Azure
+$MYSQL_HOST    = 'YOUR_DB.mysql.db';    // MySQL host provided by OVH
+$MYSQL_PORT    = 3306;                  // MySQL port (default: 3306)
+$MAX_RUNTIME   = 25;                    // Max tunnel lifetime in seconds per wake-up (keep <= 25s on OVH shared hosting)
+// ============================================================================
 
 // 1. Verify the URL security token
-$WAKE_KEY = 'YOUR_URL_SECRET_KEY';
 if (!hash_equals($WAKE_KEY, $_GET['key'] ?? '')) {
     http_response_code(403);
     exit('Forbidden');
@@ -13,7 +28,7 @@ ignore_user_abort(true);
 @set_time_limit(0);
 @ini_set('default_socket_timeout', 5);
 
-// 3. Immediately return "200 OK" to Azure to release the HTTP wake-up call
+// 3. Immediately return "200 OK" to Azure to release the HTTP wake-up request
 header('Content-Type: text/plain');
 header('Connection: close');
 header('Content-Length: 2');
@@ -24,22 +39,13 @@ if (function_exists('fastcgi_finish_request')) {
     flush();
 }
 
-// --- CONFIGURATION ---
-$AZURE_HOST    = 'mysql-tunnel-relay.xxxx.francecentral.azurecontainerapps.io'; // Your Azure FQDN
-$TUNNEL_SECRET = 'YOUR_TUNNEL_SECRET'; // Must match tunnelSecret in Azure
-
-$MYSQL_HOST    = 'YOUR_DB.mysql.db'; // MySQL host provided by OVH
-$MYSQL_PORT    = 3306;
-
-// Stay under OVH web server execution limit (usually 30s)
-$MAX_RUNTIME   = 25;
-$startTime     = time();
+$startTime = time();
 
 // File lock to prevent multiple parallel tunnel instances
 $lockFile = sys_get_temp_dir() . '/ovh_mysql_tunnel.lock';
 $lockFp   = fopen($lockFile, 'c');
 if (!flock($lockFp, LOCK_EX | LOCK_NB)) {
-    exit; // Another instance is already active
+    exit; // Another tunnel instance is already active
 }
 
 function connectWebSocket(string $host, string $secret, ?string $sessionId = null) {
