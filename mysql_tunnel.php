@@ -27,13 +27,15 @@ ignore_user_abort(true);
 @ini_set('default_socket_timeout', 5);
 
 // 3. Immediately return "200 OK" to Azure to release the HTTP wake-up request
+@apache_setenv('no-gzip', '1');
+@ini_set('zlib.output_compression', 'Off');
 while (ob_get_level() > 0) {
     ob_end_clean();
 }
-header('Content-Type: text/plain');
+header('Content-Type: text/plain; charset=utf-8');
+header('Cache-Control: no-cache, no-store, must-revalidate');
 header('Connection: close');
-header('Content-Length: 2');
-echo 'OK';
+echo "OK\n";
 flush();
 if (function_exists('fastcgi_finish_request')) {
     fastcgi_finish_request();
