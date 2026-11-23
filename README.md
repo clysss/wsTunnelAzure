@@ -2,6 +2,12 @@
 
 This repository provides a one-click deployment for a **TCP-over-WebSocket** relay on **Azure Container Apps**. It exposes a standard MySQL port (`3306`) accessible via a regular PDO DSN by encapsulating traffic over an outbound WebSocket tunnel.
 
+
+## php file on your server
+Upload mysql_tunnel.php to your OVH public web folder (or better to a subfolder) and rename it.
+
+update the 5 configurations parameters
+
 ## One-Click Deployment
 
 Click the button below to automatically deploy the infrastructure to your Azure subscription:
