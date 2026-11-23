@@ -1,20 +1,18 @@
 <?php
 // ============================================================================
 // DEPLOYMENT LOCATION:
-// Upload this file to your OVH public web folder (or better to a subfolder) : 
-// www/mysql_tunnel.php 
-// and rename it.
+// Upload this file to your OVH public web folder: /www/mysql_tunnel.php
 // ============================================================================
 
 // ============================================================================
-// CONFIGURATION — Edit these 5 values before uploading
+// CONFIGURATION — Edit these values before uploading
 // ============================================================================
-$WAKE_KEY      = 'YOUR_URL_SECRET_KEY'; // Secret token expected in ?key=... (must match WAKE_URL on Azure)
-$AZURE_HOST    = 'mysql-tunnel-relay.xxxx.francecentral.azurecontainerapps.io'; // Your Azure Container App FQDN (without https://)
-$TUNNEL_SECRET = 'YOUR_TUNNEL_SECRET';  // Must match the tunnelSecret parameter on Azure
-$MYSQL_HOST    = 'YOUR_DB.mysql.db';    // MySQL host provided by OVH
-$MYSQL_PORT    = 3306;                  // MySQL port (default: 3306)
-$MAX_RUNTIME   = 25;                    // Max tunnel lifetime in seconds per wake-up (keep <= 25s on OVH shared hosting)
+$WAKE_KEY      = 'WAKE_KEY'; // Secret token expected in ?key=... (must match WAKE_URL on Azure)
+$AZURE_HOST    = 'mysql-tunnel-relay-xxxx.francecentral.azurecontainer.io'; // Your Azure ACI FQDN (from Outputs)
+$TUNNEL_SECRET = 'CHANGE_ME_TUNNEL_SECRET'; // Must match tunnelSecret on Azure
+$MYSQL_HOST    = 'YOUR_DB.mysql.db';        // MySQL host provided by OVH
+$MYSQL_PORT    = 3306;                      // MySQL port (default: 3306)
+$MAX_RUNTIME   = 25;                        // Max tunnel lifetime in seconds per wake-up (keep <= 25s on OVH shared hosting)
 // ============================================================================
 
 // 1. Verify the URL security token
@@ -49,22 +47,14 @@ if (!flock($lockFp, LOCK_EX | LOCK_NB)) {
 }
 
 function connectWebSocket(string $host, string $secret, ?string $sessionId = null) {
-    $context = stream_context_create([
-        'ssl' => [
-            'verify_peer'      => true,
-            'verify_peer_name' => true,
-            'SNI_enabled'      => true,
-            'peer_name'        => $host
-        ]
-    ]);
-
-    $fp = @stream_socket_client("ssl://{$host}:443", $errno, $errstr, 10, STREAM_CLIENT_CONNECT, $context);
+    // Direct TCP connection to port 8080 on Azure Container Instance
+    $fp = @stream_socket_client("tcp://{$host}:8080", $errno, $errstr, 10, STREAM_CLIENT_CONNECT);
     if (!$fp) return false;
 
     $key = base64_encode(random_bytes(16));
     $headers = [
         "GET / HTTP/1.1",
-        "Host: {$host}",
+        "Host: {$host}:8080",
         "Upgrade: websocket",
         "Connection: Upgrade",
         "Sec-WebSocket-Key: {$key}",
