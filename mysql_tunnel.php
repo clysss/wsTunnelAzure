@@ -1,7 +1,7 @@
 <?php
 // ============================================================================
 // DEPLOYMENT LOCATION:
-// Upload this file to your OVH public web folder: /www/mysql_tunnel.php
+// Upload this file to your OVH public web folder: /www/go_admin_/mtun.php
 // ============================================================================
 
 // ============================================================================
@@ -12,7 +12,7 @@ $AZURE_HOST    = 'mysql-tunnel-relay-xxxx.francecentral.azurecontainer.io'; // Y
 $TUNNEL_SECRET = 'CHANGE_ME_TUNNEL_SECRET'; // Must match tunnelSecret on Azure
 $MYSQL_HOST    = 'YOUR_DB.mysql.db';        // MySQL host provided by OVH
 $MYSQL_PORT    = 3306;                      // MySQL port (default: 3306)
-$MAX_RUNTIME   = 25;                        // Max tunnel lifetime in seconds per wake-up (keep <= 25s on OVH shared hosting)
+$MAX_RUNTIME   = 25;                        // Max tunnel lifetime in seconds per wake-up (keep <= 25s on OVH)
 // ============================================================================
 
 // 1. Verify the URL security token
@@ -24,19 +24,21 @@ if (!hash_equals($WAKE_KEY, $_GET['key'] ?? '')) {
 // 2. Keep the script running after closing the HTTP connection with Azure
 ignore_user_abort(true);
 @set_time_limit(0);
-@ini_set('default_socket_timeout', 5);
+@ini_set('default_socket_timeout', '5');
 
 // 3. Immediately return "200 OK" to Azure to release the HTTP wake-up request
-@apache_setenv('no-gzip', '1');
 @ini_set('zlib.output_compression', 'Off');
 while (ob_get_level() > 0) {
     ob_end_clean();
 }
+
 header('Content-Type: text/plain; charset=utf-8');
 header('Cache-Control: no-cache, no-store, must-revalidate');
 header('Connection: close');
+
 echo "OK\n";
 flush();
+
 if (function_exists('fastcgi_finish_request')) {
     fastcgi_finish_request();
 }
