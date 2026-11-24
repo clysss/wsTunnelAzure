@@ -38,23 +38,10 @@
   },
   "variables": {
     "envName": "[concat(parameters('appName'), '-env')]",
-    "logName": "[concat(parameters('appName'), '-logs')]",
     "vnetName": "[concat(parameters('appName'), '-vnet')]",
     "subnetName": "aca-infra-subnet"
   },
   "resources": [
-    {
-      "type": "Microsoft.OperationalInsights/workspaces",
-      "apiVersion": "2023-09-01",
-      "name": "[variables('logName')]",
-      "location": "[parameters('location')]",
-      "properties": {
-        "sku": {
-          "name": "PerGB2018"
-        },
-        "retentionInDays": 30
-      }
-    },
     {
       "type": "Microsoft.Network/virtualNetworks",
       "apiVersion": "2024-05-01",
@@ -90,16 +77,11 @@
       "name": "[variables('envName')]",
       "location": "[parameters('location')]",
       "dependsOn": [
-        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logName'))]",
         "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
       ],
       "properties": {
         "appLogsConfiguration": {
-          "destination": "log-analytics",
-          "logAnalyticsConfiguration": {
-            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logName')), '2023-09-01').customerId]",
-            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('logName')), '2023-09-01').primarySharedKey]"
-          }
+          "destination": "none"
         },
         "vnetConfiguration": {
           "infrastructureSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('subnetName'))]",
