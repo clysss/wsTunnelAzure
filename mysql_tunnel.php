@@ -1,24 +1,24 @@
 <?php
 declare(strict_types=1);
-<?php
-// ============================================================================
-// DEPLOYMENT LOCATION:
-// Upload this file to your OVH public web folder (or better to a subfolder) : 
-// www/mysql_tunnel.php 
-// and rename it.
-// ============================================================================
 
 // ============================================================================
-// CONFIGURATION — Edit these values before uploading
+// USER CONFIGURATION (edit these values to match your Azure & OVH setup)
 // ============================================================================
-$WAKE_KEY      = 'WAKE_KEY';                                                 // Must match WAKE_KEY on Azure
-$AZURE_HOST    = 'mysql-tunnel-relay-xxxx.francecentral.azurecontainer.io';  // Azure ACI FQDN
-$TUNNEL_SECRET = 'CHANGE_ME_TUNNEL_SECRET';                                  // Must match TUNNEL_SECRET on Azure
-$MYSQL_HOST    = 'YOUR_DB.mysql.db';                                         // MySQL host provided by OVH
+$WAKE_KEY      = 'your-wake-secret-key';
+$TUNNEL_SECRET = 'your-long-tunnel-secret-key';
+$AZURE_HOST    = 'mysql-tunnel-relay.xxxx.francecentral.azurecontainerapps.io';
 
-$MYSQL_PORT    = 3306;                                                       // MySQL port (default: 3306)
-$MAX_RUNTIME   = 25;                                                         // Idle/base lifetime in seconds (OVH safe)
-$HARD_LIMIT    = 50;                                                         // Absolute max lifetime if a query is active
+// Optional routing mode:
+//   '' (empty)        => Dynamic mode: extracts `dbname` from PDO DSN and
+//                        routes automatically to `{$dbname}.mysql.db`.
+//   'myhost.mysql.db' => Fixed mode: transparent TCP bridge to this exact host.
+$FIXED_DB_HOST = '';
+
+// ============================================================================
+// INTERNAL RUNTIME SETTINGS (do not modify unless changing ACA template)
+// ============================================================================
+$MYSQL_PORT  = 3306;
+$MAX_RUNTIME = 290; // Total worker lifetime in seconds (must stay < ACA cooldownPeriod of 300s)
 
 // 1. Verify the URL security token
 if (!hash_equals($WAKE_KEY, $_GET['key'] ?? '')) {
@@ -140,7 +140,103 @@ function wsDecode(string &$buffer): ?array {
     return ['opcode' => $opcode, 'payload' => $payload];
 }
 
+// 4. MySQL Protocol Helpers (used only when $FIXED_DB_HOST === '')
+function buildMysqlPacket(int $seqId, string $payload): string {
+    $len = strlen($payload);
+    return chr($len & 0xff)
+        . chr(($len >> 8) & 0xff)
+        . chr(($len >> 16) & 0xff)
+        . chr($seqId & 0xff)
+        . $payload;
+}
+
+function buildSyntheticGreeting(): string {
+    $salt1    = random_bytes(8);
+    $salt2    = random_bytes(12);
+    $caps     = 0x0008a20d;
+    $capsLow  = pack('v', $caps & 0xffff);
+    $capsHigh = pack('v', ($caps >> 16) & 0xffff);
+
+    $payload  = "\x0a8.0.36-ovh-relay\0";
+    $payload .= pack('V', 1);
+    $payload .= $salt1 . "\x00";
+    $payload .= $capsLow . "\xff";
+    $payload .= pack('v', 0x0002);
+    $payload .= $capsHigh . chr(21) . str_repeat("\x00", 10);
+    $payload .= $salt2 . "\x00mysql_native_password\0";
+
+    return buildMysqlPacket(0, $payload);
+}
+
+function parseClientHandshakeResponse(string $packet): ?array {
+    if (strlen($packet) < 36) return null;
+    $payload = substr($packet, 4);
+    $caps    = unpack('V', substr($payload, 0, 4))[1];
+    $pos     = 32;
+
+    $userEnd = strpos($payload, "\0", $pos);
+    if ($userEnd === false) return null;
+    $pos = $userEnd + 1;
+
+    if ($caps & 0x00200000 || $caps & 0x00008000) {
+        if ($pos >= strlen($payload)) return null;
+        $pos += 1 + ord($payload[$pos]);
+    } else {
+        $authEnd = strpos($payload, "\0", $pos);
+        $pos = ($authEnd === false) ? strlen($payload) : $authEnd + 1;
+    }
+
+    $dbname = '';
+    if (($caps & 0x00000008) && $pos < strlen($payload)) {
+        $dbEnd = strpos($payload, "\0", $pos);
+        if ($dbEnd !== false) {
+            $dbname = substr($payload, $pos, $dbEnd - $pos);
+        }
+    }
+
+    return ['dbname' => $dbname, 'raw' => $payload];
+}
+
+function parseServerGreeting(string $packet): ?array {
+    if (strlen($packet) < 36) return null;
+    $payload = substr($packet, 4);
+    if (ord($payload[0]) !== 0x0a) return null;
+
+    $verEnd = strpos($payload, "\0", 1);
+    if ($verEnd === false) return null;
+    $pos = $verEnd + 1 + 4;
+
+    $salt1 = substr($payload, $pos, 8);
+    $pos  += 9;
+
+    $capsLow = unpack('v', substr($payload, $pos, 2))[1];
+    $pos    += 5;
+
+    $capsHigh = unpack('v', substr($payload, $pos, 2))[1];
+    $caps     = $capsLow | ($capsHigh << 16);
+    $pos     += 2;
+
+    $authLen = ($caps & 0x00080000) ? ord($payload[$pos]) : 0;
+    $pos    += 11;
+
+    $salt2Len = max(13, $authLen - 8);
+    $salt2    = substr($payload, $pos, $salt2Len);
+    $pos     += $salt2Len;
+
+    $plugin = 'mysql_native_password';
+    if ($caps & 0x00080000) {
+        $plugEnd = strpos($payload, "\0", $pos);
+        if ($plugEnd !== false) {
+            $plugin = substr($payload, $pos, $plugEnd - $pos);
+        }
+    }
+
+    return ['plugin' => $plugin, 'salt' => $salt1 . $salt2];
+}
+
 // --- MAIN EVENT LOOP ---
+$isDynamicMode = trim((string) $FIXED_DB_HOST) === '';
+
 $controlWs = connectWebSocket($AZURE_HOST, $TUNNEL_SECRET);
 if (!$controlWs) {
     flock($lockFp, LOCK_UN);
@@ -155,7 +251,9 @@ while ((time() - $startTime) < $MAX_RUNTIME) {
     $read = [$controlWs];
     foreach ($sessions as $s) {
         $read[] = $s['ws'];
-        $read[] = $s['db'];
+        if ($s['db'] !== null) {
+            $read[] = $s['db'];
+        }
     }
     $write = null;
     $except = null;
@@ -176,15 +274,34 @@ while ((time() - $startTime) < $MAX_RUNTIME) {
             $msg = json_decode($frame['payload'], true);
             if (($msg['action'] ?? '') === 'OPEN_DB' && !empty($msg['sessionId'])) {
                 $sid = $msg['sessionId'];
-                $dbSock = @stream_socket_client("tcp://{$MYSQL_HOST}:{$MYSQL_PORT}", $e1, $e2, 5);
                 $dataWs = connectWebSocket($AZURE_HOST, $TUNNEL_SECRET, $sid);
+                if (!$dataWs) continue;
 
-                if ($dbSock && $dataWs) {
-                    stream_set_blocking($dbSock, false);
-                    $sessions[$sid] = ['ws' => $dataWs, 'db' => $dbSock, 'wsBuf' => ''];
+                if ($isDynamicMode) {
+                    fwrite($dataWs, wsEncode(buildSyntheticGreeting(), 0x2));
+                    $sessions[$sid] = [
+                        'ws'          => $dataWs,
+                        'db'          => null,
+                        'wsBuf'       => '',
+                        'stage'       => 'WAIT_CLIENT_HELLO',
+                        'clientHello' => null,
+                        'pendingAuth' => '',
+                    ];
                 } else {
-                    if ($dbSock) fclose($dbSock);
-                    if ($dataWs) fclose($dataWs);
+                    $dbSock = @stream_socket_client("tcp://{$FIXED_DB_HOST}:{$MYSQL_PORT}", $e1, $e2, 5);
+                    if ($dbSock) {
+                        stream_set_blocking($dbSock, false);
+                        $sessions[$sid] = [
+                            'ws'          => $dataWs,
+                            'db'          => $dbSock,
+                            'wsBuf'       => '',
+                            'stage'       => 'BRIDGE',
+                            'clientHello' => null,
+                            'pendingAuth' => '',
+                        ];
+                    } else {
+                        fclose($dataWs);
+                    }
                 }
             }
         }
@@ -196,7 +313,7 @@ while ((time() - $startTime) < $MAX_RUNTIME) {
             $chunk = fread($s['ws'], 65536);
             if ($chunk === '' || $chunk === false) {
                 fclose($s['ws']);
-                fclose($s['db']);
+                if ($s['db'] !== null) fclose($s['db']);
                 unset($sessions[$sid]);
                 continue;
             }
@@ -204,17 +321,47 @@ while ((time() - $startTime) < $MAX_RUNTIME) {
             while (($frame = wsDecode($s['wsBuf'])) !== null) {
                 if ($frame['opcode'] === 0x8) {
                     fclose($s['ws']);
-                    fclose($s['db']);
+                    if ($s['db'] !== null) fclose($s['db']);
                     unset($sessions[$sid]);
                     continue 2;
                 }
-                if ($frame['payload'] !== '') {
+                if ($frame['payload'] === '') continue;
+
+                if ($s['stage'] === 'WAIT_CLIENT_HELLO') {
+                    $parsed = parseClientHandshakeResponse($frame['payload']);
+                    if (!$parsed || $parsed['dbname'] === '' || !preg_match('/^[a-zA-Z0-9_-]+$/', $parsed['dbname'])) {
+                        $err = buildMysqlPacket(2, "\xff\x15\x04#28000Missing or invalid dbname in PDO DSN");
+                        fwrite($s['ws'], wsEncode($err, 0x2));
+                        fwrite($s['ws'], wsEncode('', 0x8));
+                        fclose($s['ws']);
+                        unset($sessions[$sid]);
+                        continue 2;
+                    }
+
+                    $targetHost = $parsed['dbname'] . '.mysql.db';
+                    $dbSock = @stream_socket_client("tcp://{$targetHost}:{$MYSQL_PORT}", $e1, $e2, 5);
+                    if (!$dbSock) {
+                        $err = buildMysqlPacket(2, "\xff\xd2\x07#HY000Cannot connect to {$targetHost}");
+                        fwrite($s['ws'], wsEncode($err, 0x2));
+                        fwrite($s['ws'], wsEncode('', 0x8));
+                        fclose($s['ws']);
+                        unset($sessions[$sid]);
+                        continue 2;
+                    }
+
+                    stream_set_blocking($dbSock, false);
+                    $s['db']          = $dbSock;
+                    $s['clientHello'] = $parsed;
+                    $s['stage']       = 'WAIT_SERVER_GREETING';
+                } elseif ($s['stage'] === 'WAIT_SERVER_AUTH_PROMPT') {
+                    $s['pendingAuth'] .= $frame['payload'];
+                } elseif ($s['stage'] === 'BRIDGE' && $s['db'] !== null) {
                     fwrite($s['db'], $frame['payload']);
                 }
             }
         }
 
-        if (in_array($s['db'], $read, true)) {
+        if ($s['db'] !== null && in_array($s['db'], $read, true)) {
             $dbData = fread($s['db'], 65536);
             if ($dbData === '' || $dbData === false) {
                 fwrite($s['ws'], wsEncode('', 0x8));
@@ -223,7 +370,36 @@ while ((time() - $startTime) < $MAX_RUNTIME) {
                 unset($sessions[$sid]);
                 continue;
             }
-            fwrite($s['ws'], wsEncode($dbData, 0x2));
+
+            if ($s['stage'] === 'WAIT_SERVER_GREETING') {
+                $greeting = parseServerGreeting($dbData);
+                if (!$greeting) {
+                    fwrite($s['ws'], wsEncode('', 0x8));
+                    fclose($s['ws']);
+                    fclose($s['db']);
+                    unset($sessions[$sid]);
+                    continue;
+                }
+
+                fwrite($s['db'], buildMysqlPacket(1, $s['clientHello']['raw']));
+
+                $switchPayload = "\xfe" . $greeting['plugin'] . "\0" . $greeting['salt'];
+                fwrite($s['ws'], wsEncode(buildMysqlPacket(2, $switchPayload), 0x2));
+                $s['stage'] = 'WAIT_SERVER_AUTH_PROMPT';
+            } elseif ($s['stage'] === 'WAIT_SERVER_AUTH_PROMPT') {
+                if (ord($dbData[4] ?? "\x00") === 0xff) {
+                    fwrite($s['ws'], wsEncode($dbData, 0x2));
+                    $s['stage'] = 'BRIDGE';
+                } else {
+                    if ($s['pendingAuth'] !== '') {
+                        fwrite($s['db'], $s['pendingAuth']);
+                        $s['pendingAuth'] = '';
+                    }
+                    $s['stage'] = 'BRIDGE';
+                }
+            } elseif ($s['stage'] === 'BRIDGE') {
+                fwrite($s['ws'], wsEncode($dbData, 0x2));
+            }
         }
     }
     unset($s);
@@ -231,7 +407,7 @@ while ((time() - $startTime) < $MAX_RUNTIME) {
 
 foreach ($sessions as $s) {
     @fclose($s['ws']);
-    @fclose($s['db']);
+    if ($s['db'] !== null) @fclose($s['db']);
 }
 @fclose($controlWs);
 flock($lockFp, LOCK_UN);
