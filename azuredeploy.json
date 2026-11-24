@@ -40,7 +40,7 @@
     },
     {
       "type": "Microsoft.App/managedEnvironments",
-      "apiVersion": "2024-03-01",
+      "apiVersion": "2023-05-01",
       "name": "[variables('envName')]",
       "location": "[parameters('location')]",
       "dependsOn": [
@@ -58,7 +58,7 @@
     },
     {
       "type": "Microsoft.App/containerApps",
-      "apiVersion": "2024-03-01",
+      "apiVersion": "2023-05-01",
       "name": "[parameters('appName')]",
       "location": "[parameters('location')]",
       "dependsOn": [
@@ -80,6 +80,7 @@
           "ingress": {
             "external": true,
             "targetPort": 3306,
+            "exposedPort": 3306,
             "transport": "tcp"
           }
         },
@@ -119,9 +120,8 @@
             "cooldownPeriod": 300,
             "rules": [
               {
-                "name": "mysql-tcp-scaler",
-                "custom": {
-                  "type": "tcp",
+                "name": "tcp-scaling",
+                "tcp": {
                   "metadata": {
                     "concurrentConnections": "1"
                   }
