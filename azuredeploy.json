@@ -28,7 +28,7 @@
   "resources": [
     {
       "type": "Microsoft.OperationalInsights/workspaces",
-      "apiVersion": "2022-10-01",
+      "apiVersion": "2023-09-01",
       "name": "[variables('logName')]",
       "location": "[parameters('location')]",
       "properties": {
@@ -40,7 +40,7 @@
     },
     {
       "type": "Microsoft.App/managedEnvironments",
-      "apiVersion": "2024-03-01",
+      "apiVersion": "2026-01-01",
       "name": "[variables('envName')]",
       "location": "[parameters('location')]",
       "dependsOn": [
@@ -50,21 +50,15 @@
         "appLogsConfiguration": {
           "destination": "log-analytics",
           "logAnalyticsConfiguration": {
-            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logName')), '2022-10-01').customerId]",
-            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('logName')), '2022-10-01').primarySharedKey]"
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logName')), '2023-09-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('logName')), '2023-09-01').primarySharedKey]"
           }
-        },
-        "workloadProfiles": [
-          {
-            "name": "Consumption",
-            "workloadProfileType": "Consumption"
-          }
-        ]
+        }
       }
     },
     {
       "type": "Microsoft.App/containerApps",
-      "apiVersion": "2024-03-01",
+      "apiVersion": "2026-01-01",
       "name": "[parameters('appName')]",
       "location": "[parameters('location')]",
       "dependsOn": [
@@ -72,7 +66,6 @@
       ],
       "properties": {
         "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('envName'))]",
-        "workloadProfileName": "Consumption",
         "configuration": {
           "secrets": [
             {
@@ -127,7 +120,7 @@
             "cooldownPeriod": 300,
             "rules": [
               {
-                "name": "tcp-scaling",
+                "name": "mysql-tcp-scaler",
                 "tcp": {
                   "metadata": {
                     "concurrentConnections": "1"
