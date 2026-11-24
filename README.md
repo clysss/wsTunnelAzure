@@ -16,7 +16,15 @@ A single multiplexed TCP ingress on port `3306` handles both incoming `PDO` MySQ
 
 ---
 
-## 1. Server Setup (OVH / Shared Hosting)
+## 1. One-Click Azure Deployment
+
+Click the button below to deploy the Log Analytics Workspace, the Workload Profiles Environment, and the Azure Container App (`Microsoft.App` API `2026-01-01`):
+
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fclysss%2FwsTunnelAzure%2Fmain%2Fazuredeploy-aca.json)
+
+---
+
+## 2. Server Setup (OVH / Shared Hosting)
 
 1. Upload `mtun.php` to a non-obvious subfolder on your OVH web space (e.g., `/www/secure-bridge/mtun.php`).
 2. Ensure your `.ovhconfig` runs **PHP 8.1, 8.2, or 8.3** (PHP 7.x is not supported).
@@ -27,13 +35,6 @@ A single multiplexed TCP ingress on port `3306` handles both incoming `PDO` MySQ
    * `$DB_HOST`, `$DB_PORT`, `$DB_NAME` — Your internal OVH MySQL connection details.
    * Ensure the relay connects to `$AZURE_HOST` on port **`3306`**.
 
----
-
-## 2. One-Click Azure Deployment
-
-Click the button below to deploy the Log Analytics Workspace, the Workload Profiles Environment, and the Azure Container App (`Microsoft.App` API `2026-01-01`):
-
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fclysss%2FwsTunnelAzure%2Fmain%2Fazuredeploy-aca.json)
 
 ### Deployment Parameters
 
