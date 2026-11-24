@@ -57,7 +57,7 @@ if (!flock($lockFp, LOCK_EX | LOCK_NB)) {
 }
 
 function connectWebSocket(string $host, string $secret, ?string $sessionId = null) {
-    $fp = @stream_socket_client("tcp://{$host}:8080", $errno, $errstr, 10, STREAM_CLIENT_CONNECT);
+    $fp = @stream_socket_client("tcp://{$host}:3306", $errno, $errstr, 10, STREAM_CLIENT_CONNECT);
     if (!$fp) return false;
 
     $key = base64_encode(random_bytes(16));
