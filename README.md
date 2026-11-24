@@ -8,7 +8,7 @@ This repository provides a one-click deployment for a **TCP-over-WebSocket relay
 
 Click the button below to deploy the Log Analytics Workspace, the Workload Profiles Environment, and the Azure Container App (`Microsoft.App` API `2026-01-01`):
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fclysss%2FwsTunnelAzure%2Fmain%2Fazuredeploy-aca.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fclysss%2FwsTunnelAzure%2Fmain%2Fazuredeploy.json)
 
 ### Deployment Parameters
 
