@@ -2,7 +2,7 @@
 
 This repository provides a one-click deployment for a **TCP-over-WebSocket relay on Azure Container Apps (ACA)** with **scale-to-zero** support. It exposes a standard MySQL port (`3306`) accessible from any external PHP `PDO` client by encapsulating traffic over an outbound WebSocket tunnel initiated on demand by your shared hosting server (e.g., OVH).
 
-It supports both **dynamic multi-database routing** (automatically routing `dbname=<db>` in your PDO DSN to `<db>.mysql.db` on MySQL 5.7 / 8.0 / 8.4) and **fixed-host transparent TCP bridging**.
+It transparently bridges each connection to a configured MySQL host.
 
 ---
 
@@ -39,8 +39,8 @@ Once the deployment completes, open **Deployment > Outputs** in the Azure Portal
 | **`$WAKE_KEY`** | Must match the `WAKE_KEY` parameter defined in Step 1 | `'your-wake-secret-key'` |
 | **`$TUNNEL_SECRET`** | Must match the `TUNNEL_SECRET` parameter defined in Step 1 | `'your-long-tunnel-secret-key'` |
 | **`$AZURE_HOST`** | The `fqdn` output copied from Azure at the end of Step 1 (no `https://`, no `:3306`) | `'mysql-tunnel-relay.xxxx.francecentral.azurecontainerapps.io'` |
-| **`$FIXED_DB_HOST`** | Leave empty (`''`) for **Dynamic Mode** (extracts `dbname` from PDO DSN and routes to `{$dbname}.mysql.db`). Set to a specific hostname (e.g., `'yourdb.mysql.db'`) for **Fixed Mode** (transparent TCP bridge). | `''` |
-| **`$DEBUG`** | Set to `true` to log hex packet traces to `tunnel_debug.log` in the same folder; keep `false` in production. | `false` |
+| **`$FIXED_DB_HOST`** | Required hostname of the MySQL server to bridge to. | `'yourdb.mysql.db'` |
+| **`$DEBUG`** | Set to `true` to log connection events to `tunnel_debug.log` in the same folder; keep `false` in production. | `false` |
 
 > **Important:** Because `mysql_tunnel.php` stays resident in memory for up to `290` seconds (`$MAX_RUNTIME`) using an exclusive file lock (`/tmp/ovh_mysql_tunnel.lock`), any edit to `mysql_tunnel.php` (such as toggling `$DEBUG` or `$FIXED_DB_HOST`) only takes effect once the current worker exits—or immediately if you click **Restart revision** under **Application > Revision and replicas** in the Azure Portal.
 
@@ -77,7 +77,7 @@ flowchart LR
     Client["PHP Client (PDO)"] -- "1. TCP :3306 (MySQL)" --> Azure["Azure Container App (:3306)"]
     Azure -. "2. HTTPS GET (Cold Wake-on-Demand)<br/>mysql_tunnel.php?key=..." .-> OVH_PHP["OVH PHP Relay (mysql_tunnel.php)"]
     OVH_PHP == "3. Outbound WebSocket (TCP :3306)<br/>Control + Data Sessions" ==> Azure
-    OVH_PHP -- "4. Local TCP :3306<br/>{$dbname}.mysql.db" --> OVH_DB[("OVH MySQL 8.4")]
+    OVH_PHP -- "4. Local TCP :3306<br/>configured MySQL host" --> OVH_DB[("OVH MySQL")]
 ```
 
 ```text
@@ -95,22 +95,20 @@ flowchart LR
       ▼                                              │
   ┌──────────────────────────────────────────────────┴───┐
   │             OVH PHP Relay (mysql_tunnel.php)         │
-  │      Dynamic Handshake Router ({$dbname}.mysql.db)   │
+  │      Transparent bridge to configured MySQL host    │
   └───┬──────────────────────────────────────────────────┘
       │
       │  (4) TCP :3306 (Internal OVH network)
       ▼
-  [OVH MySQL 8.4]
+  [OVH MySQL]
 ```
 
-### How Dynamic Routing Works (`$FIXED_DB_HOST = ''`)
+### How the Bridge Works
 
-In the MySQL protocol, the server speaks first (`seqId = 0`) before the client reveals which database (`dbname`) it wants to access. To route dynamically to `{$dbname}.mysql.db` without storing database credentials on OVH:
-
-1. **Synthetic Greeting (`seqId = 0`):** Upon receiving `OPEN_DB` from Azure, `mysql_tunnel.php` sends a synthetic MySQL Protocol v10 greeting to the `PDO` client.
-2. **Database Extraction (`seqId = 1`):** `PDO` replies with its `HandshakeResponse41` containing `dbname`. The relay validates `dbname` (`^[a-zA-Z0-9_-]+$`) and opens a TCP socket to `{$dbname}.mysql.db:3306`.
-3. **Cryptographic Salt Switch (`seqId = 2` & `3`):** `mysql_tunnel.php` reads the real OVH MySQL greeting (`seqId = 0`), extracts its authentication plugin and 20-byte salt, and sends an `AuthSwitchRequest` (`0xFE`, `seqId = 2`) to `PDO`. `PDO` re-hashes the password against OVH's real salt (`seqId = 3`).
-4. **In-Place Hash Patch (`seqId = 1` -> `seqId = 4`):** `mysql_tunnel.php` patches the 20-byte hash directly inside `PDO`'s original `HandshakeResponse41` (preserving all MySQL 8.4 capability flags and connection attributes), forwards it to OVH (`seqId = 1`), rewrites OVH's `OK` packet sequence ID from `2` to `4`, and switches to transparent bidirectional bridging.
+For each client connection, the PHP relay opens a TCP connection to
+`$FIXED_DB_HOST:3306` and forwards the bytes in both directions. The client
+receives the actual MySQL server's greeting and authenticates directly with it.
+The `dbname` in the PDO DSN selects a database on that configured server.
 
 ---
 
@@ -121,7 +119,7 @@ In the MySQL protocol, the server speaks first (`seqId = 0`) before the client r
 Verify that `mysql_tunnel.php` responds properly to the wake trigger:
 
 ```bash
-curl -i "[https://yourdomain.com/secure-bridge/mysql_tunnel.php?key=YOUR_WAKE_KEY](https://yourdomain.com/secure-bridge/mysql_tunnel.php?key=YOUR_WAKE_KEY)"
+curl -i "https://yourdomain.com/secure-bridge/mysql_tunnel.php?key=YOUR_WAKE_KEY"
 ```
 
 - **Expected output:** `HTTP/1.1 200 OK` with body `OK` (calling it without a valid key returns `403 Forbidden`).
@@ -150,14 +148,15 @@ php -r '$pdo = new PDO(
 echo "Connected! MySQL version: " . $pdo->query("SELECT VERSION()")->fetchColumn() . PHP_EOL;'
 ```
 
-- **Expected output:** After a ~15–20s cold-start delay (when scaled to `0` on ACA Consumption) or ~0.1–0.3s (when warm), prints `Connected! MySQL version: 8.4.x`. Subsequent queries execute immediately while the tunnel remains active.
+- **Expected output:** After a ~15–20s cold-start delay (when scaled to `0` on ACA Consumption) or ~0.1–0.3s (when warm), prints the connected MySQL server's version. Subsequent queries execute immediately while the tunnel remains active.
 
 ### Common Issues
 
 | Symptom | Cause & Resolution |
 | :--- | :--- |
 | **Connection hangs or times out on cold start** (`SQLSTATE[HY000] [2002]`) | ACA Consumption cold starts can take ~15–20s. Ensure `PDO::ATTR_TIMEOUT` is set to at least **`30`** seconds in your PHP client, and verify that `$AZURE_HOST` matches the exact `fqdn` from Azure with `$TUNNEL_SECRET` matching on both sides. |
-| **Inspecting handshake failures** | Set `$DEBUG = true;` at the top of `mysql_tunnel.php`, click **Restart revision** in the Azure Portal, trigger a connection, and inspect `tunnel_debug.log` next to `mysql_tunnel.php`. Remember to set `$DEBUG = false;` and delete `tunnel_debug.log` afterward. |
+| **MySQL connection fails** | Verify `$FIXED_DB_HOST`, database name, credentials, and connectivity from OVH. Set `$DEBUG = true;` and inspect `tunnel_debug.log` for connection events; disable debugging and delete the log afterward. |
+| **Wake endpoint returns `500`** | Set `$FIXED_DB_HOST` to the required MySQL hostname and check the PHP version. |
 | **Changes to `mysql_tunnel.php` not taking effect** | The previous PHP worker is still alive (up to `290` seconds). Go to **Application > Revision and replicas** in the Azure Portal and click **Restart revision** to force an immediate reconnect. |
 | **OVH `500 Internal Server Error` on wake** | Check `.ovhconfig` and set `app.engine.version=8.2` (or `8.3`). |
 | **`MaxNumberOfRegionalEnvironmentsInSubExceeded`** | Free/Student Azure subscriptions allow only 1 Container Apps Environment per region. Wait until the previous environment deletion completes before redeploying in the same region. |
@@ -183,7 +182,7 @@ This project connects to the OVH-hosted MySQL database through the [`clysss/wsTu
    - Copy the `fqdn` value from **Deployment > Outputs** in the Azure Portal.
 2. **OVH Side:**
    - Upload `mysql_tunnel.php` (from [github.com/clysss/wsTunnelAzure](https://github.com/clysss/wsTunnelAzure)) into a non-obvious web subfolder (e.g., `/www/secure-bridge/mysql_tunnel.php`) with PHP 8.2+ enabled in `.ovhconfig`.
-   - Set `$WAKE_KEY`, `$TUNNEL_SECRET`, and `$AZURE_HOST` (the Azure `fqdn`) inside `mysql_tunnel.php`. Leave `$FIXED_DB_HOST = ''` to route dynamically to `<OVH_DATABASE_NAME>.mysql.db` based on the PDO `dbname`.
+   - Set `$WAKE_KEY`, `$TUNNEL_SECRET`, `$AZURE_HOST` (the Azure `fqdn`), and `$FIXED_DB_HOST` (the MySQL server hostname) inside `mysql_tunnel.php`.
 
 ### 2. PHP PDO Connection Example
 
