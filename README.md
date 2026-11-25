@@ -70,12 +70,37 @@ Existing revisions in Azure Container Apps are immutable; changing `WAKE_URL` (e
 
 ## 4. Architecture
 
-A single multiplexed TCP ingress on port `3306` handles both incoming `PDO` MySQL clients and outbound WebSocket control/data sessions from your OVH server. When idle for 5 minutes (`cooldownPeriod: 300`), the Azure Container App automatically scales down to `0` replicas.
+A single multiplexed TCP ingress on port `3306` handles both incoming `PDO` MySQL clients and outbound WebSocket control/data sessions initiated by your OVH server. When idle for 5 minutes (`cooldownPeriod: 300`), the Azure Container App automatically scales down to `0` replicas.
+
+```mermaid
+flowchart LR
+    Client["PHP Client (PDO)"] -- "1. TCP :3306 (MySQL)" --> Azure["Azure Container App (:3306)"]
+    Azure -. "2. HTTPS GET (Cold Wake-on-Demand)<br/>mysql_tunnel.php?key=..." .-> OVH_PHP["OVH PHP Relay (mysql_tunnel.php)"]
+    OVH_PHP == "3. Outbound WebSocket (TCP :3306)<br/>Control + Data Sessions" ==> Azure
+    OVH_PHP -- "4. Local TCP :3306<br/>{$dbname}.mysql.db" --> OVH_DB[("OVH MySQL 8.4")]
+```
 
 ```text
-[PHP Client (PDO)] ──(TCP :3306)──> [Azure Container Apps :3306] <══(WS / TCP :3306)══ [OVH PHP Relay] ──(TCP :3306)──> [OVH MySQL]
-                                            │
-                                            └──(HTTPS Wake-on-Demand)──> [https://yourdomain.com/.../mysql_tunnel.php?key=](https://yourdomain.com/.../mysql_tunnel.php?key=)...
+  [PHP Client (PDO)]
+          │
+          │  (1) TCP :3306 (MySQL protocol)
+          ▼
+  ┌──────────────────────────────────────────────────────┐
+  │           Azure Container App (:3306)                │
+  │         Multiplexed TCP / WebSocket Relay            │
+  └───┬──────────────────────────────────────────────▲───┘
+      │                                              │
+      │ (2) HTTPS GET (Cold Wake-on-Demand)          │ (3) Outbound WebSocket
+      │     .../mysql_tunnel.php?key=...             │     over TCP :3306
+      ▼                                              │
+  ┌──────────────────────────────────────────────────┴───┐
+  │             OVH PHP Relay (mysql_tunnel.php)         │
+  │      Dynamic Handshake Router ({$dbname}.mysql.db)   │
+  └───┬──────────────────────────────────────────────────┘
+      │
+      │  (4) TCP :3306 (Internal OVH network)
+      ▼
+  [OVH MySQL 8.4]
 ```
 
 ### How Dynamic Routing Works (`$FIXED_DB_HOST = ''`)
