@@ -46,7 +46,29 @@ Once the deployment completes, open **Deployment > Outputs** in the Azure Portal
 
 ---
 
-## 3. Architecture
+## 3. Updating Secrets & Configuration Post-Deployment
+
+In Azure Container Apps, secrets (`WAKE_KEY`, `TUNNEL_SECRET`) and environment variables (`WAKE_URL`) are managed in separate panels and require a revision restart or a new revision to take effect.
+
+### Updating `WAKE_KEY` or `TUNNEL_SECRET` (App Secrets)
+
+1. Open your Container App in the Azure Portal and go to **Settings > Secrets** (or **Application > Secrets**).
+2. Click the secret you want to rotate (`wake-key` or `tunnel-secret`), or click `...` > **Edit**, enter the new value, and click **Save**.
+3. Go to **Application > Revision and replicas**, open the active revision details, and click **Restart revision** so running containers pick up the updated secret value.
+4. Update `$WAKE_KEY` or `$TUNNEL_SECRET` at the top of `mysql_tunnel.php` on OVH to match.
+
+### Updating `WAKE_URL` (Revision Environment Variables)
+
+Existing revisions in Azure Container Apps are immutable; changing `WAKE_URL` (e.g., if you move `mysql_tunnel.php` to a different folder on OVH) creates a new revision:
+
+1. Go to **Application > Revision and replicas** and click **Create new revision**.
+2. Under the **Container** section, click the container name (`mysql-tunnel-relay`) and open the **Environment variables** tab.
+3. Update the value of **`WAKE_URL`** (without `?key=...`), click **Save**, then click **Create** at the bottom of the page.
+4. Wait until the new revision shows **Active** with **100%** traffic.
+
+---
+
+## 4. Architecture
 
 A single multiplexed TCP ingress on port `3306` handles both incoming `PDO` MySQL clients and outbound WebSocket control/data sessions from your OVH server. When idle for 5 minutes (`cooldownPeriod: 300`), the Azure Container App automatically scales down to `0` replicas.
 
@@ -67,7 +89,7 @@ In the MySQL protocol, the server speaks first (`seqId = 0`) before the client r
 
 ---
 
-## 4. Testing & Troubleshooting
+## 5. Testing & Troubleshooting
 
 ### 1. Test the OVH Wake Endpoint
 
@@ -117,7 +139,7 @@ echo "Connected! MySQL version: " . $pdo->query("SELECT VERSION()")->fetchColumn
 
 ---
 
-## 5. Client Project Integration Sheet
+## 6. Client Project Integration Sheet
 
 Copy and paste the block below into the `README.md` (or `SETUP_DB.md`) of any consumer project using this MySQL tunnel, then fill in the `<...>` placeholders.
 
