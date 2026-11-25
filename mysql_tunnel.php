@@ -9,7 +9,7 @@ $TUNNEL_SECRET = 'your-long-tunnel-secret-key';
 $AZURE_HOST    = 'mysql-tunnel-relay.xxxx.francecentral.azurecontainerapps.io';
 
 // MySQL hostname to which all client connections are bridged.
-$FIXED_DB_HOST = '';
+$DB_HOST = '';
 
 // Debug toggle:
 //   false => Production mode (no disk I/O, no log file created).
@@ -29,7 +29,7 @@ if (!hash_equals($WAKE_KEY, $_GET['key'] ?? '')) {
     exit('Forbidden');
 }
 
-if (trim($FIXED_DB_HOST) === '') {
+if (trim($DB_HOST) === '') {
     http_response_code(500);
     exit('MySQL host is not configured');
 }
@@ -232,7 +232,7 @@ while ((time() - $startTime) < $MAX_RUNTIME) {
                 $dataWs = connectWebSocket($AZURE_HOST, $TUNNEL_SECRET, $sid);
                 if (!$dataWs) continue;
 
-                $dbSock = @stream_socket_client("tcp://{$FIXED_DB_HOST}:{$MYSQL_PORT}", $e1, $e2, 5);
+                $dbSock = @stream_socket_client("tcp://{$DB_HOST}:{$MYSQL_PORT}", $e1, $e2, 5);
                 if ($dbSock) {
                     stream_set_blocking($dbSock, false);
                     $sessions[$sid] = [
