@@ -1,5 +1,20 @@
 # MySQL Reverse WebSocket Tunnel on Azure
 
+## Archived version: dynamic authentication is unreliable
+
+This branch preserves the dynamic routing implementation for investigation. The
+fixed-host bridge works transparently, but routing by `dbname` requires the relay
+to send a synthetic MySQL greeting before it knows the target server. The client
+therefore negotiates capabilities and authentication against that greeting rather
+than the real server's greeting. Even after switching to the real server's salt,
+replaying a modified client handshake can produce an invalid authentication packet
+or incompatible capabilities, including `Bad handshake` errors with MySQL 8.4.
+
+The implementation also assumes a single authentication response and rewrites
+only the first server response's sequence number. Additional authentication steps,
+different plugins, TLS, or fragmented packets can cause failures or protocol
+desynchronization. Dynamic routing on this branch should not be considered reliable.
+
 This repository provides a one-click deployment for a **TCP-over-WebSocket relay on Azure Container Apps (ACA)** with **scale-to-zero** support. It exposes a standard MySQL port (`3306`) accessible from any external PHP `PDO` client by encapsulating traffic over an outbound WebSocket tunnel initiated on demand by your shared hosting server (e.g., OVH).
 
 It supports both **dynamic multi-database routing** (automatically routing `dbname=<db>` in your PDO DSN to `<db>.mysql.db` on MySQL 5.7 / 8.0 / 8.4) and **fixed-host transparent TCP bridging**.
